@@ -12,6 +12,17 @@
  * - On OS X EI Capitan (10.11.6), definging _XOPEN_SOURCE=600 would cause
  *   SIGWINCH to be undefined.
  */
+
+/*
+## DEBUG:
+> https://u.osu.edu/cstutorials/2018/09/28/how-to-debug-c-program-using-gdb-in-6-simple-steps/
+
+cc -g passh.c
+gdb a.out
+break 590
+run -p XXX -c 1 ssh sdasdas@192.168.3.1
+*/
+
 #if !defined(__APPLE__) && !defined(__FreeBSD__)
 #define _XOPEN_SOURCE 600 /* for posix_openpt() */
 #endif
@@ -64,6 +75,7 @@ static struct {
         bool nohup_child;
         bool fatal_no_prompt;
         bool auto_yesno;
+        bool quiet;
         char *password;
         char *passwd_prompt;
         char *yesno_prompt;
@@ -100,6 +112,7 @@ usage(int exitcode)
            "                  (0 means no timeout. Default: %d)\n"
            "  -T              Exit if timed out waiting for password prompt\n"
            "  -y              Auto answer `(yes/no)?' questions\n"
+           "  -q              Don't output password prompt line\n"
 #if 0
            "  -Y <pattern>    Regexp (BRE) for the `yes/no' prompt\n"
            "                  (Default: `" DEFAULT_YESNO "')\n"
@@ -154,6 +167,7 @@ startup()
     g.opt.password = DEFAULT_PASSWD;
     g.opt.tries = DEFAULT_COUNT;
     g.opt.timeout = DEFAULT_TIMEOUT;
+    g.opt.quiet = false;
 }
 
 char *
@@ -206,7 +220,7 @@ getargs(int argc, char **argv)
      * POSIXLY_CORRECT is set, then option processing stops as soon as a
      * nonoption argument is encountered.
      */
-    while ((ch = getopt(argc, argv, "+:c:Chil:L:np:P:t:Ty")) != -1) {
+    while ((ch = getopt(argc, argv, "+:c:Chil:L:np:P:t:Ty:q")) != -1) {
         switch (ch) {
             case 'c':
                 g.opt.tries = atoi(optarg);
@@ -257,6 +271,9 @@ getargs(int argc, char **argv)
 
             case 'y':
                 g.opt.auto_yesno = true;
+                break;
+            case 'q':
+                g.opt.quiet = true;
                 break;
 #if 0
             case 'Y':
@@ -795,7 +812,16 @@ L_chk_sigchld:
                     goto L_chk_sigchld;
                 }
 
-                write2(STDOUT_FILENO, fd_from_pty, cache + ncache, nread);
+                // Password prompt found
+                if ( regexec(&g.opt.re_prompt, cache, 1, re_match, 0) == 0) {
+                    if (! g.opt.quiet ) {
+                        write2(STDOUT_FILENO, fd_from_pty, cache + ncache, nread);
+                    }
+                    // write(STDOUT_FILENO, "quiet", strlen("quiet") );
+                    // write(STDOUT_FILENO, cache, strlen(cache) );
+                }else {
+                    write2(STDOUT_FILENO, fd_from_pty, cache + ncache, nread);
+                }
 
                 if (! given_up && g.opt.timeout != 0
                     && labs(time(NULL) - last_time) >= g.opt.timeout) {
@@ -853,10 +879,9 @@ L_chk_sigchld:
                         ncache -= re_match[0].rm_eo;
                         cache += re_match[0].rm_eo;
                     }
-                } else {
-                    cache = buf2;
-                    ncache = 0;
                 }
+                cache = buf2;
+                ncache = 0;
 
                 if (cache + ncache >= buf2 + 2 * BUFFSIZE) {
                     if (ncache > BUFFSIZE) {
